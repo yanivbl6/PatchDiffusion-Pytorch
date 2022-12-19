@@ -41,7 +41,7 @@ class AttentionPool2d(nn.Module):
         self.num_heads = embed_dim // num_heads_channels
         self.attention = QKVAttention(self.num_heads)
 
-    def forward(self, x):
+    def forward(self, x, op_droprate = None):
         b, c, *_spatial = x.shape
         x = x.reshape(b, c, -1)  # NC(HW)
         x = th.cat([x.mean(dim=-1, keepdim=True), x], dim=-1)  # NC(HW+1)
@@ -58,7 +58,7 @@ class TimestepBlock(nn.Module):
     """
 
     @abstractmethod
-    def forward(self, x, emb):
+    def forward(self, x, emb, op_droprate = None):
         """
         Apply the module to `x` given `emb` timestep embeddings.
         """
@@ -70,10 +70,13 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, op_droprate = None):
+
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(x, emb)
+                x = layer(x, emb, op_droprate)
+            elif isinstance(layer, ResBlock):
+                x = layer(x, op_droprate)
             else:
                 x = layer(x)
         return x
@@ -256,7 +259,7 @@ class ResBlock(TimestepBlock):
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
             
-    def forward(self, x, emb):
+    def forward(self, x, emb, op_droprate = None):
         """
         Apply the block to a Tensor, conditioned on a timestep embedding.
 
@@ -265,22 +268,34 @@ class ResBlock(TimestepBlock):
         :return: an [N x C x ...] Tensor of outputs.
         """
         return checkpoint(
-            self._forward, (x, emb), self.parameters(), self.use_checkpoint
+            self._forward, (x, emb, op_droprate), self.parameters(), self.use_checkpoint
         )
 
-    def _forward(self, x, conditioning):
+    def _forward(self, x, conditioning, op_droprate = None):
         if self.class_emb_channels: c_emb, emb = conditioning
         else: c_emb, emb = None, conditioning
 
         if self.updown:
             in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
             h = in_rest(x)
-            h = self.h_upd(h)
+
+            if self.out_channels == self.channels and op_droprate is not None:
+                
+                skip_this_layer = th.rand_like(op_droprate) < op_droprate
+                h2 = h.clone()
+                h = self.h_upd(h)
+                h[skip_this_layer] = h2[skip_this_layer]
+            else:
+                h = self.h_upd(h)
+
             x = self.x_upd(x)
             h = in_conv(h)
         else:
             h = self.in_layers(x)
-        
+            if self.out_channels == self.channels and op_droprate is not None :
+                skip_this_layer = th.rand_like(op_droprate) < op_droprate
+                h[skip_this_layer] = 0
+
         emb_out = self.emb_layers(emb).type(h.dtype)
 
         while len(emb_out.shape) < len(h.shape):
@@ -346,10 +361,10 @@ class AttentionBlock(nn.Module):
 
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
-    def forward(self, x):
+    def forward(self, x, op_droprate = None):
         return checkpoint(self._forward, (x,), self.parameters(), True)
 
-    def _forward(self, x):
+    def _forward(self, x, op_droprate = None):
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
         qkv = self.qkv(self.norm(x))
@@ -509,6 +524,9 @@ class UNetModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
+        conv_op_dropout = 0.0,
+        conv_op_dropout_max = 0.0,
+        conv_op_dropout_type = 0
     ):
         super().__init__()
 
@@ -539,6 +557,11 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
 
         self.learn_sigma = (out_channels == in_channels * 2)
+
+        self.conv_op_dropout = conv_op_dropout
+        self.conv_op_dropout_max = conv_op_dropout_max
+        self.conv_op_dropout_type = conv_op_dropout_type
+
 
         if self.num_classes:
             class_emb_channels = int(channel_mult[0] * model_channels)
@@ -700,6 +723,7 @@ class UNetModel(nn.Module):
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
+            zero_module(conv_nd(dims, input_ch, in_channels, 3, padding=1)),
         )
 
         if self.learn_sigma: 
@@ -709,13 +733,6 @@ class UNetModel(nn.Module):
                 nn.SiLU(),
                 conv_nd(dims, model_channels, in_channels, 3, padding=1),
                 nn.Sigmoid()
-            )
-            self.out.append(
-                zero_module(conv_nd(dims, input_ch, in_channels, 3, padding=1))
-            )
-        else:
-            self.out.append(
-                zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1))
             )
 
     def convert_to_fp16(self):
@@ -743,6 +760,17 @@ class UNetModel(nn.Module):
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
+
+        if self.training:
+            if self.conv_op_dropout_type == 0: ##linear
+                op_droprate = None
+            elif self.conv_op_dropout_type == 1: ##linear
+                op_droprate = ((timesteps-400.0)/400.0).clamp(0.0, self.conv_op_dropout_max)
+        else:
+            op_droprate = None
+
+
+
         x = self.to_patches(x)
 
         assert (y is not None) == (
@@ -767,14 +795,14 @@ class UNetModel(nn.Module):
         h = x.clone()
         
         for module in self.input_blocks[1:]:
-            h = module(h, emb)
+            h = module(h, emb, op_droprate)
             hs.append(h)
 
         h = self.middle_block(h, emb)
 
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb)
+            h = module(h, emb, op_droprate)
         
         h = h.type(x_dtype)
         

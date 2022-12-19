@@ -66,8 +66,8 @@ def model_and_diffusion_defaults():
         patch_size=4,
         classifier_free=True,
         snr_splits="",
-        weight_schedule="sqrt_snr"
-
+        weight_schedule="sqrt_snr",
+        dropout_args={}
     )
     res.update(diffusion_defaults())
     return res
@@ -108,7 +108,8 @@ def create_model_and_diffusion(
     use_fp16,
     use_new_attention_order,
     snr_splits,
-    weight_schedule
+    weight_schedule,
+    dropout_args,
 ):
     model = create_model(
         image_size,
@@ -129,6 +130,7 @@ def create_model_and_diffusion(
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
         use_new_attention_order=use_new_attention_order,
+        dropout_args=dropout_args,
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -166,9 +168,12 @@ def create_model(
     resblock_updown=False,
     use_fp16=False,
     use_new_attention_order=False,
+    dropout_args={},
 ):
     assert image_size%patch_size == 0, "patch size must evenly divide image size."
 
+
+    ##print("dropout args: " ,dropout_args)
     input_res = image_size//patch_size
 
     if channel_mult == "":
@@ -211,6 +216,7 @@ def create_model(
         use_scale_shift_norm=use_scale_shift_norm,
         resblock_updown=resblock_updown,
         use_new_attention_order=use_new_attention_order,
+        **dropout_args,
     )
 
 

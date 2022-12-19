@@ -555,7 +555,8 @@ class GaussianDiffusion:
         for i in indices:
             #finds what model the current timestep corresponds to
             model = self.get_current_model(models, i)
-
+            # if i % 100 == 0:
+            #     print(i)
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
                 out = self.p_sample(
