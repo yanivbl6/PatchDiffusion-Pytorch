@@ -195,8 +195,7 @@ def main_worker(gpu, ngpus_per_node, args):
     cont = True
     Ts = [50,100,200,400,600,800]
     while cont:
-        model.train()
-        cont = trainer.run_loop_n(generate_every)
+
         model.eval()
         sample(model, diffusion, args, step = steps, gpu = gpu)
         results = evaluator.evaluate(Ts, int(args.num_eval / ngpus_per_node), ngpus_per_node)
@@ -206,6 +205,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
         if gpu == 0 and  wandb.run is not None:
             wandb.log(results)
+
+        model.train()
+        cont = trainer.run_loop_n(generate_every)
+        
         steps += generate_every
 
 
@@ -249,7 +252,11 @@ def sample(model,diffusion,args, step, gpu):
     if wandb.run is not None:
         run_name = wandb.run.name
 
-    args.save_dir = f"samples__{run_name}_{rounded_steps}"
+    args.save_dir = f"samples_{run_name}_{rounded_steps}"
+
+    if not os.path.exists(args.save_dir):
+
+        os.makedirs(args.save_dir)
 
     if model.classifier_free and model.num_classes and args.guidance_scale != 1.0:
         model_fns = [diffusion.make_classifier_free_fn(model, args.guidance_scale)]
