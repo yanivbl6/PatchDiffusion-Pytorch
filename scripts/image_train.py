@@ -25,6 +25,7 @@ import os
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
+import time
 
 def main():
     args = create_argparser().parse_args()
@@ -248,15 +249,24 @@ def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1):
 def sample(model,diffusion,args, step, gpu):
 
     run_name = ""
+
     rounded_steps = step - (step % 25000)
     if wandb.run is not None:
         run_name = wandb.run.name
 
+    run_name = "P4"
+
     args.save_dir = f"samples_{run_name}_{rounded_steps}"
 
     if not os.path.exists(args.save_dir):
-
-        os.makedirs(args.save_dir)
+        if gpu == 0:
+            try:
+                os.makedirs(args.save_dir, exist_ok=True)
+            except:
+                os.makedirs(args.save_dir)
+        else:
+            while not os.path.exists(args.save_dir):
+                time.sleep(1)
 
     if model.classifier_free and model.num_classes and args.guidance_scale != 1.0:
         model_fns = [diffusion.make_classifier_free_fn(model, args.guidance_scale)]
