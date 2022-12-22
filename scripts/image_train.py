@@ -25,14 +25,14 @@ import os
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
-import time
+from  time import time
 
 def main():
     args = create_argparser().parse_args()
 
     args.distributed = True
     ngpus_per_node = torch.cuda.device_count()
-    print(ngpus_per_node)
+    print("Number of GPUs: ", ngpus_per_node)
     if args.distributed:
         args.world_size = ngpus_per_node * args.world_size
         mp.spawn(main_worker, nprocs=ngpus_per_node,
@@ -191,29 +191,47 @@ def main_worker(gpu, ngpus_per_node, args):
     )
 
     
-    steps = 0
+    
+    eval_every = args.eval_every
     generate_every = args.generate_every
+    assert(generate_every % eval_every == 0)
+
+    evals_to_generate = generate_every // eval_every
+
     cont = True
     Ts = [50,100,200,400,600,800]
+
+    steps = 0
+
     while cont:
 
+        model.train()
+        cont = trainer.run_loop_n(eval_every)
+        steps += eval_every
+
         model.eval()
-        sample(model, diffusion, args, step = steps, gpu = gpu)
+    
+        if steps % generate_every == 0:
+            start_sample = time()
+            sample(model, diffusion, args, step = steps, gpu = gpu)
+            sample_time = time() - start_sample
+            if gpu==0:
+                logger.log(f"Sample Time: {sample_time}")
+
+
         results = evaluator.evaluate(Ts, int(args.num_eval / ngpus_per_node), ngpus_per_node)
 
-        if gpu == 0:
-            print(results)
+        # if gpu == 0:
+        #     print(results)
 
         if gpu == 0 and  wandb.run is not None:
             wandb.log(results)
 
-        model.train()
-        cont = trainer.run_loop_n(generate_every)
+
         
-        steps += generate_every
 
 
-def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1):
+def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start = 0):
     
 
     figdims = [int(d) for d in figdims.split(',')]
@@ -227,24 +245,27 @@ def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1):
     else:
         m, n = figdims
 
-    plt.figure(figsize=(scale*n, scale*m))
+    ##plt.figure(figsize=(scale*n, scale*m))
 
     imgs= []
 
-    for i in range(len(images[:m*n])):
-        plt.subplot(m, n, i+1)
+    for i in range(images.shape[0]):
+        ##plt.subplot(m, n, i+1)
+
+        plt.figure(figsize=(scale, scale))
         plt.imshow(images[i])
         plt.axis('off')
     
-        if gpu == 0 and  wandb.run is not None:
+        if gpu == 0 and  wandb.run is not None and start == 0:
             imgs.append(wandb.Image(images[i], caption=f"image_{i}"))
 
-    if gpu == 0 and  wandb.run is not None:
-        wandb.log({"Samples": imgs})
+        plt.tight_layout()
+        plt.savefig(figure_path + f"_{i+start}_{gpu}.png" )
 
-    plt.tight_layout()
-    plt.savefig(figure_path)
-    print(f"saved image samples at {figure_path}")
+    if gpu == 0 and  wandb.run is not None and len(imgs) > 0:
+        wandb.log({"Samples": imgs}, commit=False)
+
+    # print(f"saved image samples at {figure_path}")
 
 def sample(model,diffusion,args, step, gpu):
 
@@ -256,17 +277,16 @@ def sample(model,diffusion,args, step, gpu):
 
     run_name = "P4"
 
-    args.save_dir = f"samples_{run_name}_{rounded_steps}"
+    args.save_dir = f"samples_P4_misc_{rounded_steps}"
+    args.save_dir = f"samples_P4_misc"
 
-    if not os.path.exists(args.save_dir):
-        if gpu == 0:
-            try:
-                os.makedirs(args.save_dir, exist_ok=True)
-            except:
-                os.makedirs(args.save_dir)
-        else:
-            while not os.path.exists(args.save_dir):
-                time.sleep(1)
+
+    if gpu == 0:
+        if not os.path.exists(args.save_dir):
+            os.makedirs(args.save_dir)
+
+    dist.barrier()
+
 
     if model.classifier_free and model.num_classes and args.guidance_scale != 1.0:
         model_fns = [diffusion.make_classifier_free_fn(model, args.guidance_scale)]
@@ -284,7 +304,20 @@ def sample(model,diffusion,args, step, gpu):
     logger.log("sampling...")
     all_images = []
     all_labels = []
-    while len(all_images) * args.batch_size < args.num_samples:
+
+    out_path = os.path.join(args.save_dir, f"sample_")
+
+    count = 0
+
+    ngpus_per_node = torch.cuda.device_count()
+    to_sample = (args.num_samples // ngpus_per_node) + (1 if args.num_samples % ngpus_per_node > gpu else 0)
+
+    num_interations = (to_sample+args.batch_size -1 ) // args.batch_size
+
+    bar = tqdm(range(num_interations), total=num_interations, desc = "Sampling") if gpu == 0 else range(num_interations)
+
+    count = 0
+    for j in bar:
         model_kwargs = {}
         if args.class_cond:
             classes = torch.randint(
@@ -306,45 +339,57 @@ def sample(model,diffusion,args, step, gpu):
         sample = sample.permute(0, 2, 3, 1)
         sample = sample.contiguous()
 
-        gathered_samples = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        if args.class_cond:
-            gathered_labels = [
-                torch.zeros_like(classes) for _ in range(dist.get_world_size())
-            ]
-            dist.all_gather(gathered_labels, classes)
-            all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
-        logger.log(f"created {len(all_images) * args.batch_size} samples")
+        ##all_images.extend(sample.cpu().numpy())
 
-    arr = np.concatenate(all_images, axis=0)
-    arr = arr[: args.num_samples]
-    if args.class_cond:
-        label_arr = np.concatenate(all_labels, axis=0)
-        label_arr = label_arr[: args.num_samples]
-    if dist.get_rank() == 0:
-        shape_str = "x".join([str(x) for x in arr.shape])
+        # gathered_samples = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
+        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+        # if args.class_cond:
+        #     gathered_labels = [
+        #         torch.zeros_like(classes) for _ in range(dist.get_world_size())
+        #     ]
+        #     dist.all_gather(gathered_labels, classes)
+        #     all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
+        # logger.log(f"created {len(all_images) * args.batch_size} samples")
 
-        samples_index = len(os.listdir(args.save_dir))//2
+        if count + sample.size(0) > to_sample:
+            sample = sample[: to_sample - count]
 
-        out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
-        if os.path.exists(out_path):
-            print(f"Warning, there is already an npz file {out_path}, saving to a different file...")
-            new_rands = np.random.randint(0, high=1e6)
-            samples_index += new_rands
-            out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
-        
-        logger.log(f"saving to {out_path}")
-        if args.class_cond:
-            np.savez(out_path, arr, label_arr)
-        else:
-            np.savez(out_path, arr)
+        ##print(f"sample size {sample.size()}")
+        save_images(sample.cpu().numpy(), out_path, args.figdims, args.figscale, gpu, start =  count)
+        count  = count + sample.size(0)
 
-        out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.png")
-        if os.path.exists(out_path):
-            print(f"Warning, there is already a png file {out_path}, overwriting this file...")
+    # arr = np.concatenate(all_images, axis=0)
+    # arr = arr[: args.num_samples]
+    # if args.class_cond:
+    #     label_arr = np.concatenate(all_labels, axis=0)
+    #     label_arr = label_arr[: args.num_samples]
 
-        save_images(arr, out_path, args.figdims, args.figscale, gpu)
+    ##if dist.get_rank() == 0:
+
+
+    #shape_str = "x".join([str(x) for x in arr.shape])
+
+    # samples_index = len(os.listdir(args.save_dir))//2
+
+    # out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
+    # if os.path.exists(out_path):
+    #     print(f"Warning, there is already an npz file {out_path}, saving to a different file...")
+    #     new_rands = np.random.randint(0, high=1e6)
+    #     samples_index += new_rands
+    #     out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
+    
+    # logger.log(f"saving to {out_path}")
+    # if args.class_cond:
+    #     np.savez(out_path, arr, label_arr)
+    # else:
+    #     np.savez(out_path, arr)
+
+    # out_path = os.path.join(args.save_dir, f"samples_{shape_str}")
+    # if os.path.exists(out_path):
+    #     print(f"Warning, there is already a png file {out_path}, overwriting this file...")
+
+    # save_images(arr, out_path, args.figdims, args.figscale, gpu)
 
     dist.barrier()
     logger.log("sampling complete")
@@ -379,7 +424,8 @@ def create_argparser():
         save_dir="",
         figdims="4,4",
         figscale="5",
-        generate_every = 100000,
+        generate_every = 5000,
+        eval_every = 100000,
 
         # model args
         conv_op_dropout=0.0,
