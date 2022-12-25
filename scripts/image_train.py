@@ -27,6 +27,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from  time import time
 
+from pytorch_fid.fid_score import calculate_fid_given_paths
+
 def main():
     args = create_argparser().parse_args()
 
@@ -224,12 +226,31 @@ def main_worker(gpu, ngpus_per_node, args):
         # if gpu == 0:
         #     print(results)
 
+
+
+
+
+
+        # if gpu == 0:
+        #     ##clear GPU memory
+
+        #     model = model.cpu()
+        #     torch.cuda.empty_cache()
+
+        #     ## use pytorch-fid to measure FID
+        #     fid = calculate_fid_given_paths(["samples_P4_misc", args.data_dir], 16, torch.cuda.current_device(), dims = 2048)
+        #     print("FID: ", fid)
+        #     results["FID"] = fid
+
+        #     torch.cuda.empty_cache()
+
+        #     ## load the model back to GPU
+        #     model = model.cuda()
+
+        # dist.barrier()
+        
         if gpu == 0 and  wandb.run is not None:
             wandb.log(results)
-
-
-        
-
 
 def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start = 0):
     
