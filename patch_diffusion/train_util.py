@@ -243,7 +243,8 @@ class TrainLoop:
             self.step += 1
 
             if self.step >= end:
-                self.save()
+                ##self.save()
+                dist.barrier()
                 return True
 
         # Save the last checkpoint if it wasn't already saved.

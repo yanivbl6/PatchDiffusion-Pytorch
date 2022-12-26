@@ -34,6 +34,11 @@ def main():
 
     args.distributed = True
     ngpus_per_node = torch.cuda.device_count()
+
+    if not os.path.exists("./checkpoints/"):
+        os.makedirs("./checkpoints/")
+
+
     print("Number of GPUs: ", ngpus_per_node)
     if args.distributed:
         args.world_size = ngpus_per_node * args.world_size
@@ -240,14 +245,19 @@ def main_worker(gpu, ngpus_per_node, args):
                 torch.cuda.empty_cache()
 
 
-                ##save a checkpoint of the model, and the optimizer
-                # torch.save({
-                #             'epoch': epoch,
-                #             'model_state_dict': model.state_dict(),
-                #             #'optimizer_state_dict': optimizer.state_dict(),
-                #             'loss': loss,
-                #             }, f"./checkpoints/checkpoint__{wandb.run.name}_{steps}.pt")
-                ## use pytorch-fid to measure FID
+                ## save the model to CPU 
+                if wandb.run is not None:
+                    filename = f"./checkpoints/{wandb.run.name}.pt"
+                else:
+                    filename = f"./checkpoints/checkpoint.pt"
+
+                torch.save({
+                            'step': steps,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': trainer.opt.state_dict(),
+                            }, filename)
+
+                ##calculate FID
                 fid = calculate_fid_given_paths(["samples_P4_misc", args.data_dir], 16, torch.cuda.current_device(), dims = 2048)
                 print("FID: ", fid)
                 results["FID"] = fid
@@ -397,38 +407,6 @@ def sample(model,diffusion,args, step, gpu):
         ##print(f"sample size {sample.size()}")
         save_images(sample.cpu().numpy(), out_path, args.figdims, args.figscale, gpu, start =  count)
         count  = count + sample.size(0)
-
-    # arr = np.concatenate(all_images, axis=0)
-    # arr = arr[: args.num_samples]
-    # if args.class_cond:
-    #     label_arr = np.concatenate(all_labels, axis=0)
-    #     label_arr = label_arr[: args.num_samples]
-
-    ##if dist.get_rank() == 0:
-
-
-    #shape_str = "x".join([str(x) for x in arr.shape])
-
-    # samples_index = len(os.listdir(args.save_dir))//2
-
-    # out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
-    # if os.path.exists(out_path):
-    #     print(f"Warning, there is already an npz file {out_path}, saving to a different file...")
-    #     new_rands = np.random.randint(0, high=1e6)
-    #     samples_index += new_rands
-    #     out_path = os.path.join(args.save_dir, f"samples_{shape_str}_{samples_index}.npz")
-    
-    # logger.log(f"saving to {out_path}")
-    # if args.class_cond:
-    #     np.savez(out_path, arr, label_arr)
-    # else:
-    #     np.savez(out_path, arr)
-
-    # out_path = os.path.join(args.save_dir, f"samples_{shape_str}")
-    # if os.path.exists(out_path):
-    #     print(f"Warning, there is already a png file {out_path}, overwriting this file...")
-
-    # save_images(arr, out_path, args.figdims, args.figscale, gpu)
 
     dist.barrier()
     logger.log("sampling complete")
