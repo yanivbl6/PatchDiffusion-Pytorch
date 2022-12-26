@@ -231,26 +231,44 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 
-        # if gpu == 0:
-        #     ##clear GPU memory
+        if steps % generate_every == 0:
 
-        #     model = model.cpu()
-        #     torch.cuda.empty_cache()
+            if gpu == 0:
+                ##clear GPU memory
 
-        #     ## use pytorch-fid to measure FID
-        #     fid = calculate_fid_given_paths(["samples_P4_misc", args.data_dir], 16, torch.cuda.current_device(), dims = 2048)
-        #     print("FID: ", fid)
-        #     results["FID"] = fid
+                model = model.cpu()
+                torch.cuda.empty_cache()
 
-        #     torch.cuda.empty_cache()
 
-        #     ## load the model back to GPU
-        #     model = model.cuda()
+                ##save a checkpoint of the model, and the optimizer
+                # torch.save({
+                #             'epoch': epoch,
+                #             'model_state_dict': model.state_dict(),
+                #             #'optimizer_state_dict': optimizer.state_dict(),
+                #             'loss': loss,
+                #             }, f"./checkpoints/checkpoint__{wandb.run.name}_{steps}.pt")
+                ## use pytorch-fid to measure FID
+                fid = calculate_fid_given_paths(["samples_P4_misc", args.data_dir], 16, torch.cuda.current_device(), dims = 2048)
+                print("FID: ", fid)
+                results["FID"] = fid
 
-        # dist.barrier()
-        
-        if gpu == 0 and  wandb.run is not None:
+                torch.cuda.empty_cache()
+
+                ##load the model back to GPU
+                model = model.cuda()
+
+
+                
+
+
+        if wandb.run is not None and gpu == 0:
             wandb.log(results)
+
+        dist.barrier()
+
+
+
+
 
 def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start = 0):
     
