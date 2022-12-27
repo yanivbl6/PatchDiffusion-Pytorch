@@ -242,8 +242,7 @@ def main_worker(gpu, ngpus_per_node, args):
             if gpu == 0:
                 ##clear GPU memory
 
-                model = model.cpu()
-                torch.cuda.empty_cache()
+                ##model = model.cpu()
 
 
                 ## save the model to CPU 
@@ -259,14 +258,17 @@ def main_worker(gpu, ngpus_per_node, args):
                             }, filename)
 
                 ##calculate FID
+
+                torch.cuda.empty_cache()
+
                 fid = calculate_fid_given_paths(["samples_P4_misc", args.data_dir], 16, torch.cuda.current_device(), dims = 2048)
                 print("FID: ", fid)
                 results["FID"] = fid
 
-                torch.cuda.empty_cache()
+                ##torch.cuda.empty_cache()
 
                 ##load the model back to GPU
-                model = model.cuda()
+                ##model = model.cuda()
 
 
                 
@@ -279,10 +281,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 
-
-
 def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start = 0):
-    
+
 
     figdims = [int(d) for d in figdims.split(',')]
     scale = float(scale)
@@ -297,18 +297,22 @@ def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start =
 
     ##plt.figure(figsize=(scale*n, scale*m))
 
-    imgs= []
-
+    imgs = []
     for i in range(images.shape[0]):
-        ##plt.subplot(m, n, i+1)
-
-        plt.figure(figsize=(scale, scale))
-        plt.imshow(images[i])
-    
         torchvision.utils.save_image(images[i], figure_path + f"_{i+start}_{gpu}.jpg")
 
-        if gpu == 0 and  wandb.run is not None and start == 0:
+
+
+    if start == 0 and gpu == 0 and  wandb.run is not None:
+        images = ((images + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+        images = images.permute(0, 2, 3, 1)
+        images = images.contiguous().cpu().numpy()
+
+        for i in range(images.shape[0]):
             imgs.append(wandb.Image(images[i], caption=f"image_{i}"))
+
+
+
 
     if gpu == 0 and  wandb.run is not None and len(imgs) > 0:
         wandb.log({"Samples": imgs}, commit=False)
@@ -374,9 +378,9 @@ def sample(model,diffusion,args, step, gpu):
             denoised_fn=denoised_fn,
             device=dist_util.dev()
         )
-        sample = ((sample + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-        sample = sample.permute(0, 2, 3, 1)
-        sample = sample.contiguous()
+        # sample = ((sample + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+        # sample = sample.permute(0, 2, 3, 1)
+        # sample = sample.contiguous()
 
         ##all_images.extend(sample.cpu().numpy())
 
@@ -395,7 +399,7 @@ def sample(model,diffusion,args, step, gpu):
             sample = sample[: to_sample - count]
 
         ##print(f"sample size {sample.size()}")
-        save_images(sample.cpu().numpy(), out_path, args.figdims, args.figscale, gpu, start =  count)
+        save_images(sample.cpu(), out_path, args.figdims, args.figscale, gpu, start =  count)
         count  = count + sample.size(0)
 
     dist.barrier()
