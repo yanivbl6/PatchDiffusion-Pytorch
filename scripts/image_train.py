@@ -28,6 +28,7 @@ from tqdm import tqdm
 from  time import time
 
 from pytorch_fid.fid_score import calculate_fid_given_paths
+import torchvision
 
 def main():
     args = create_argparser().parse_args()
@@ -303,13 +304,11 @@ def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start =
 
         plt.figure(figsize=(scale, scale))
         plt.imshow(images[i])
-        plt.axis('off')
     
+        torchvision.utils.save_image(images[i], figure_path + f"_{i+start}_{gpu}.jpg")
+
         if gpu == 0 and  wandb.run is not None and start == 0:
             imgs.append(wandb.Image(images[i], caption=f"image_{i}"))
-
-        plt.tight_layout()
-        plt.savefig(figure_path + f"_{i+start}_{gpu}.png" )
 
     if gpu == 0 and  wandb.run is not None and len(imgs) > 0:
         wandb.log({"Samples": imgs}, commit=False)
@@ -318,15 +317,6 @@ def save_images(images, figure_path, figdims='4,4', scale='5', gpu = -1, start =
 
 def sample(model,diffusion,args, step, gpu):
 
-    run_name = ""
-
-    rounded_steps = step - (step % 25000)
-    if wandb.run is not None:
-        run_name = wandb.run.name
-
-    run_name = "P4"
-
-    args.save_dir = f"samples_P4_misc_{rounded_steps}"
     args.save_dir = f"samples_P4_misc"
 
 
