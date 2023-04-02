@@ -33,45 +33,64 @@ import torchvision
 def main():
     args = create_argparser().parse_args()
 
+    dist_util.setup_dist()
+    logger.configure()
+
+    print("logger dir: ",logger.get_dir())
+    
     args.distributed = True
-    ngpus_per_node = torch.cuda.device_count()
 
-    if not os.path.exists("./checkpoints/"):
-        os.makedirs("./checkpoints/")
+    ngpus_per_node = int(os.environ["WORLD_SIZE"])
+    args.gpu = int(os.environ["RANK"])
+    gpu = args.gpu
+
+    print("My rank: ", gpu, ", world size: ", ngpus_per_node)
+    logger.log("Looking for existing log file...")
+    folder_name = f"{args.save_dir}/{args.name}"
+    resume_checkpoint = ""
+    if os.path.exists(args.save_dir):
+        if os.path.exists(folder_name):
+            most = -1
+            for chk_f in os.listdir(folder_name):
+                if chk_f.endswith(".pt"):
+                    if "model" in chk_f:
+                        split1 = chk_f.split("model")[-1].split(".")[0]
+                        try:
+                            if int(split1) > most:
+                                most = int(split1)
+                                resume_checkpoint = folder_name  + "/" + chk_f
+                        except:
+                            pass
+        else:
+            if gpu == 0:
+                os.mkdir(folder_name)
 
 
-    print("Number of GPUs: ", ngpus_per_node)
-    if args.distributed:
-        args.world_size = ngpus_per_node * args.world_size
-        mp.spawn(main_worker, nprocs=ngpus_per_node,
-                 args=(ngpus_per_node, args))
-    else:
-        main_worker(0, ngpus_per_node, args)
+    dist.barrier()
 
 
-def main_worker(gpu, ngpus_per_node, args):
+    wandb_id = None
+    if gpu == 0 and resume_checkpoint != "":
+        logger.log(f"Found existing log file: {resume_checkpoint}")
 
-    ##dist_util.setup_dist()
-    ##logger.configure()
+        try:
+            with open(f"{folder_name}/wandb_id.txt", "rb") as f:
+                wandb_id = torch.load(f)
+        except:
+            pass
 
-    args.gpu = gpu
+    if not args.misc and args.gpu == 0:
 
-    if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
-
-    if args.distributed:
-        if args.dist_url == "env://" and args.rank == -1:
-            args.rank = int(os.environ["RANK"])
-        
-        args.rank = args.rank * ngpus_per_node + gpu
-        dist.init_process_group(backend="nccl", init_method=args.dist_url,
-                                world_size=args.world_size, rank=args.rank,
-                                timeout=datetime.timedelta(minutes=1))
-
-        if not args.misc and args.rank == 0:
+        if wandb_id is None:
             wandb.init(project="dropoutDiffusion", entity="dl-projects", config=args)
-    else:
-        wandb.init(project="dropoutDiffusion", entity="dl-projects", config=args)
+            wandb.run.name = args.name
+            wandb.run.save()
+            with open(f"{folder_name}/wandb_id.txt", "wb") as f:
+                torch.save(wandb.run.id ,f)
+
+        else:
+            wandb.init(project="dropoutDiffusion", entity="dl-projects", config=args, id=wandb_id, resume="must")
+
 
     if not args.misc:
         wandb.Table.MAX_ROWS = args.num_samples *  ngpus_per_node
@@ -89,35 +108,33 @@ def main_worker(gpu, ngpus_per_node, args):
     if gpu==0:
         print(model)
 
+    # if args.distributed:
+
+    #     classifier_free = model.classifier_free
+    #     num_classes = model.num_classes
 
 
-    if args.distributed:
-
-        classifier_free = model.classifier_free
-        num_classes = model.num_classes
-
-
-        if args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-            model.cuda(args.gpu)
-            args.batch_size = int(args.batch_size / ngpus_per_node)
-            # args.workers = int(
-            #     (args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[args.gpu])
-        else:
-            model.cuda()
-            model = torch.nn.parallel.DistributedDataParallel(model)
+    #     if args.gpu is not None:
+    #         torch.cuda.set_device(args.gpu)
+    #         model.cuda(args.gpu)
+    #         args.batch_size = int(args.batch_size / ngpus_per_node)
+    #         # args.workers = int(
+    #         #     (args.workers + ngpus_per_node - 1) / ngpus_per_node)
+    #         model = torch.nn.parallel.DistributedDataParallel(
+    #             model, device_ids=[args.gpu])
+    #     else:
+    #         model.cuda()
+    #         model = torch.nn.parallel.DistributedDataParallel(model)
 
 
-        model.classifier_free = classifier_free
-        model.num_classes = num_classes
+    #     model.classifier_free = classifier_free
+    #     model.num_classes = num_classes
 
-    elif args.gpu is not None:
-        torch.cuda.set_device(args.gpu)
-        model = model.cuda(args.gpu)
-    else:
-        model = torch.nn.DataParallel(model).cuda()
+    # elif args.gpu is not None:
+    #     torch.cuda.set_device(args.gpu)
+    #     model = model.cuda(args.gpu)
+    # else:
+    #     model = torch.nn.DataParallel(model).cuda()
 
 
     ##model.to(dist_util.dev())
@@ -132,7 +149,6 @@ def main_worker(gpu, ngpus_per_node, args):
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=args.class_cond,
-        distributed = args.distributed,
         start = args.num_eval,
     )
 
@@ -141,7 +157,6 @@ def main_worker(gpu, ngpus_per_node, args):
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=args.class_cond,
-        distributed = args.distributed,
         end = args.num_eval,
     )
 
