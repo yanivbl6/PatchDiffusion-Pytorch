@@ -442,7 +442,10 @@ def create_argparser():
         conv_op_dropout=0.0,
         conv_op_dropout_max=1.0,
         conv_op_dropout_type=0,
-        
+
+        # loss args        
+        model_mean_type = 'xstart',
+
     )
 
     defaults.update(model_and_diffusion_defaults())

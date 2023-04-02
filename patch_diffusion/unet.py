@@ -766,6 +766,10 @@ class UNetModel(nn.Module):
                 op_droprate = None
             elif self.conv_op_dropout_type == 1: ##linear
                 op_droprate = ((timesteps-400.0)/400.0).clamp(0.0, self.conv_op_dropout_max)
+            elif self.conv_op_dropout_type == 2: ##uniform
+                op_droprate = th.ones_like(timesteps)*self.conv_op_dropout_max
+            elif self.conv_op_dropout_type == 4: ##linear
+                op_droprate = (timesteps/800.0).clamp(0.0, self.conv_op_dropout_max)
         else:
             op_droprate = None
 

@@ -32,7 +32,7 @@ def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
         scale = 1000 / num_diffusion_timesteps
         beta_start = scale * 0.0001
         if schedule_name != "linear":
-            beta_max = float(schedule_name[6:])
+            beta_max = float(schedule_name[len("linear"):])
         else:
             beta_max = 0.02
             
