@@ -461,6 +461,9 @@ def create_argparser():
         # loss args        
         model_mean_type = 'xstart',
 
+        # names
+        name = "misc",
+        save_dir = "/savedir",
     )
 
     defaults.update(model_and_diffusion_defaults())
