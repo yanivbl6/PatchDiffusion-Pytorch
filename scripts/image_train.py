@@ -137,7 +137,7 @@ def main():
     #     model = torch.nn.DataParallel(model).cuda()
 
 
-    ##model.to(dist_util.dev())
+    model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
 
     logger.log("creating data loader...")
@@ -447,7 +447,7 @@ def create_argparser():
         clip_denoised=True,
         use_ddim=False,
         guidance_scale=1.5,
-        save_dir="",
+        save_dir="/savedir",,
         figdims="4,4",
         figscale="5",
         generate_every = 5000,
@@ -463,7 +463,6 @@ def create_argparser():
 
         # names
         name = "misc",
-        save_dir = "/savedir",
     )
 
     defaults.update(model_and_diffusion_defaults())
